@@ -8,6 +8,9 @@
 (define-constant ERR-NOT-FOUND (err u103))
 (define-constant ERR-ZERO-AMOUNT (err u104))
 (define-constant ERR-INVALID-ARBITRATOR (err u105))
+(define-constant ERR-INVALID-COUNTERPARTY (err u106))
+(define-constant ERR-INVALID-ESCROW-ID (err u107))
+(define-constant ERR-SELF-TRANSFER (err u108))
 
 ;; Constants for escrow status
 (define-constant STATUS-PENDING u1)
@@ -16,11 +19,11 @@
 (define-constant STATUS-REFUNDED u4)
 
 ;; Reputation score modifiers
-(define-constant SCORE-NEW-USER u50)           ;; Starting score for new users
-(define-constant SCORE-SUCCESSFUL-TRADE u5)    ;; Points added for successful trade
-(define-constant SCORE-DISPUTE-INITIATED u3)   ;; Points deducted for raising dispute
-(define-constant SCORE-DISPUTE-LOST u10)       ;; Points deducted for losing dispute
-(define-constant SCORE-ARBITRATOR-RESOLVED u2) ;; Points added for arbitrator resolving dispute
+(define-constant SCORE-NEW-USER u50)           
+(define-constant SCORE-SUCCESSFUL-TRADE u5)    
+(define-constant SCORE-DISPUTE-INITIATED u3)   
+(define-constant SCORE-DISPUTE-LOST u10)       
+(define-constant SCORE-ARBITRATOR-RESOLVED u2) 
 
 ;; Data structures
 (define-map escrows
@@ -59,6 +62,27 @@
 
 ;; Track the next available escrow ID
 (define-data-var next-escrow-id uint u1)
+
+;; Validate escrow ID
+(define-private (is-valid-escrow-id (escrow-id uint))
+    (and 
+        (> escrow-id u0)
+        (< escrow-id (var-get next-escrow-id))
+    )
+)
+
+;; Validate principal is not contract caller
+(define-private (is-valid-counterparty (counterparty principal))
+    (not (is-eq tx-sender counterparty))
+)
+
+;; Validate arbitrator
+(define-private (is-valid-arbitrator (arbitrator principal))
+    (and 
+        (not (is-eq tx-sender arbitrator))
+        (is-some (map-get? arbitrator-reputation arbitrator))
+    )
+)
 
 ;; Initialize or get user reputation
 (define-private (get-or-init-user-reputation (user principal)) 
@@ -159,11 +183,14 @@
         (
             (escrow-id (var-get next-escrow-id))
         )
-        ;; Check for valid amount
+        ;; Validate inputs
         (asserts! (> amount u0) ERR-ZERO-AMOUNT)
+        (asserts! (is-valid-counterparty counterparty) ERR-INVALID-COUNTERPARTY)
+        (asserts! (is-valid-arbitrator arbitrator) ERR-INVALID-ARBITRATOR)
         
         ;; Initialize reputations if needed
         (get-or-init-user-reputation tx-sender)
+        ;; Safe to call after validation
         (get-or-init-user-reputation counterparty)
         (get-or-init-arbitrator-reputation arbitrator)
         
@@ -198,6 +225,8 @@
 (define-public (complete-escrow (escrow-id uint))
     (let
         (
+            ;; Validate escrow-id first
+            (valid (asserts! (is-valid-escrow-id escrow-id) ERR-INVALID-ESCROW-ID))
             (escrow (unwrap! (map-get? escrows {escrow-id: escrow-id}) ERR-NOT-FOUND))
             (amount (unwrap! (map-get? escrow-balance escrow-id) ERR-NOT-FOUND))
         )
@@ -230,6 +259,8 @@
 (define-public (initiate-dispute (escrow-id uint))
     (let
         (
+            ;; Validate escrow-id first
+            (valid (asserts! (is-valid-escrow-id escrow-id) ERR-INVALID-ESCROW-ID))
             (escrow (unwrap! (map-get? escrows {escrow-id: escrow-id}) ERR-NOT-FOUND))
         )
         ;; Verify caller is initiator or counterparty
@@ -261,6 +292,8 @@
 (define-public (arbitrate-dispute (escrow-id uint) (release-to-counterparty bool))
     (let
         (
+            ;; Validate escrow-id first
+            (valid (asserts! (is-valid-escrow-id escrow-id) ERR-INVALID-ESCROW-ID))
             (escrow (unwrap! (map-get? escrows {escrow-id: escrow-id}) ERR-NOT-FOUND))
             (amount (unwrap! (map-get? escrow-balance escrow-id) ERR-NOT-FOUND))
         )
